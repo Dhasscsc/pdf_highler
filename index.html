@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="ta">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PDF ஹைலைட் டூல்</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Tamil:wght@400;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<style>
+:root{--ink:#1d2433;--bg:#eef1f6;--bar:#16324f;--acc:#f5b700;--ok:#1b7f5c;--bad:#c0392b}
+*{box-sizing:border-box}
+body{margin:0;font-family:'Noto Sans Tamil',system-ui,sans-serif;background:var(--bg);color:var(--ink)}
+header{background:var(--bar);color:#fff;padding:10px 14px;position:sticky;top:0;z-index:20}
+h1{font-size:18px;margin:0 0 8px;font-weight:700}
+.row{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:6px}
+button,.btn{font:inherit;font-size:13px;border:0;border-radius:6px;padding:7px 11px;background:#fff;color:var(--ink);cursor:pointer}
+button:hover,.btn:hover{background:#e3e9f3}
+button.on{background:var(--acc);font-weight:700}
+button.main{background:var(--ok);color:#fff}
+button.danger{background:var(--bad);color:#fff}
+button:disabled{opacity:.45;cursor:default}
+input[type=text],input[type=number]{font:inherit;font-size:13px;padding:7px 9px;border:0;border-radius:6px;width:150px}
+input[type=file]{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;pointer-events:none}
+.sw{width:26px;height:26px;border-radius:50%;border:2px solid #fff;padding:0}
+.sw.sel{outline:3px solid var(--acc);outline-offset:1px}
+label{font-size:13px;display:flex;gap:4px;align-items:center}
+#msg{font-size:13px;color:#cfe3ff;margin-left:auto}
+main{padding:14px;overflow:auto;text-align:center}
+#drop{max-width:520px;margin:60px auto;padding:40px 20px;border:3px dashed #8a9bb5;border-radius:14px;color:#51607a;line-height:1.8}
+#wrap{display:none;position:relative;margin:0 auto;box-shadow:0 2px 14px rgba(0,0,0,.25);background:#fff;width:max-content}
+#ov{position:absolute;inset:0;cursor:crosshair;touch-action:none}
+#ov.erase{cursor:pointer;touch-action:auto}
+.hl{position:absolute;mix-blend-mode:multiply;opacity:.55}
+#ov.erase .hl:hover{outline:2px solid var(--bad)}
+.tmp{position:absolute;border:1px dashed #333}
+</style>
+</head>
+<body>
+<header>
+<h1>PDF ஹைலைட் டூல்</h1>
+<div class="row">
+<label class="btn" for="f">PDF திற</label><input type="file" id="f" accept=".pdf,application/pdf">
+<button id="prev" disabled>◀</button>
+<span id="pn" style="font-size:13px">0 / 0</span>
+<button id="next" disabled>▶</button>
+<button id="zo">−</button><button id="zi">+</button>
+<span id="cols" style="display:flex;gap:6px"></span>
+<button id="mDraw" class="on">ஹைலைட் வரை</button>
+<button id="mErase">அழிப்பான்</button>
+<button id="undo">செயல்தவிர்</button>
+<span id="msg"></span>
+</div>
+<div class="row">
+<input type="text" id="q" placeholder="சொல் / எண் தேடு">
+<label><input type="checkbox" id="allp" checked> எல்லா பக்கங்கள்</label>
+<button id="go">தேடி ஹைலைட் செய்</button>
+<button id="clrP">இந்தப் பக்கம் அழி</button>
+<button id="clrA" class="danger">எல்லாம் அழி</button>
+<button id="save" class="main">ஹைலைட் PDF சேமி</button>
+<button id="exp">JSON எடு</button>
+<label class="btn" for="imp">JSON இறக்கு</label><input type="file" id="imp" accept=".json">
+</div>
+</header>
+<main>
+<div id="drop">PDF கோப்பை இங்கே இழுத்து விடவும்<br>அல்லது மேலே "PDF திற" அழுத்தவும்<br>பக்கத்தின் மேல் மவுஸ் / விரலால் இழுத்தால் ஹைலைட் ஆகும்</div>
+<div id="wrap"><canvas id="cv"></canvas><div id="ov"></div></div>
+</main>
+<script>
+if(window.pdfjsLib)pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+const $=id=>document.getElementById(id);
+const COLORS=['#ffeb3b','#69f0ae','#ff80ab','#40c4ff','#ffab40'];
+let doc=null,bytes=null,fname='',key='',pg=1,scale=1.3,color=COLORS[0],mode='draw',H=[],curH=0,rt=null;
+
+COLORS.forEach((c,i)=>{const b=document.createElement('button');b.className='sw'+(i?'':' sel');b.style.background=c;
+ b.onclick=()=>{color=c;document.querySelectorAll('.sw').forEach(x=>x.classList.remove('sel'));b.classList.add('sel')};$('cols').appendChild(b)});
+
+function say(t){$('msg').textContent=t}
+function persist(){try{localStorage.setItem(key,JSON.stringify(H))}catch(e){}}
+
+async function load(file){
+ if(!window.pdfjsLib){say('PDF நூலகம் லோட் ஆகவில்லை - இன்டர்நெட் சரிபார்த்து பக்கத்தை Refresh செய்யவும்');return}
+ if(!file||file.type!=='application/pdf'&&!/\.pdf$/i.test(file.name)){say('PDF கோப்பு மட்டும் தேர்வு செய்யவும்');return}
+ bytes=new Uint8Array(await file.arrayBuffer());fname=file.name;
+ try{doc=await pdfjsLib.getDocument({data:bytes.slice()}).promise}catch(e){say('PDF திறக்க முடியவில்லை');return}
+ key='hl:'+fname+':'+file.size;
+ try{H=JSON.parse(localStorage.getItem(key)||'[]')}catch(e){H=[]}
+ pg=1;$('drop').style.display='none';$('wrap').style.display='block';
+ ['prev','next'].forEach(i=>$(i).disabled=false);
+ await render();say(H.length?H.length+' ஹைலைட் மீட்கப்பட்டது':'தயார்');
+}
+
+async function render(){
+ const page=await doc.getPage(pg),vp=page.getViewport({scale}),base=page.getViewport({scale:1});
+ curH=base.height;const cv=$('cv');cv.width=vp.width;cv.height=vp.height;
+ $('ov').style.width=vp.width+'px';$('ov').style.height=vp.height+'px';
+ if(rt){try{rt.cancel()}catch(e){}}
+ rt=page.render({canvasContext:cv.getContext('2d'),viewport:vp});
+ try{await rt.promise}catch(e){}
+ $('pn').textContent=pg+' / '+doc.numPages;drawOv();
+}
+
+function drawOv(){
+ const ov=$('ov');ov.querySelectorAll('.hl').forEach(n=>n.remove());
+ H.forEach((h,i)=>{if(h.p!==pg)return;const d=document.createElement('div');d.className='hl';
+  d.style.cssText=`left:${h.x*scale}px;top:${(curH-h.y-h.h)*scale}px;width:${h.w*scale}px;height:${h.h*scale}px;background:${h.c}`;
+  d.onclick=e=>{if(mode==='erase'){H.splice(H.indexOf(h),1);persist();drawOv();e.stopPropagation()}};ov.appendChild(d)});
+}
+
+/* கையால் வரைதல் */
+let st=null,tmp=null;
+$('ov').addEventListener('pointerdown',e=>{
+ if(mode!=='draw'||!doc)return;const r=$('ov').getBoundingClientRect();
+ st={x:e.clientX-r.left,y:e.clientY-r.top};tmp=document.createElement('div');tmp.className='tmp';$('ov').appendChild(tmp);
+ $('ov').setPointerCapture(e.pointerId);
+});
+$('ov').addEventListener('pointermove',e=>{
+ if(!st)return;const r=$('ov').getBoundingClientRect(),x=e.clientX-r.left,y=e.clientY-r.top;
+ tmp.style.left=Math.min(st.x,x)+'px';tmp.style.top=Math.min(st.y,y)+'px';
+ tmp.style.width=Math.abs(x-st.x)+'px';tmp.style.height=Math.abs(y-st.y)+'px';
+});
+$('ov').addEventListener('pointerup',e=>{
+ if(!st)return;const r=$('ov').getBoundingClientRect(),x=e.clientX-r.left,y=e.clientY-r.top;
+ const l=Math.min(st.x,x),t=Math.min(st.y,y),w=Math.abs(x-st.x),h=Math.abs(y-st.y);
+ tmp.remove();st=null;tmp=null;
+ if(w>4&&h>4){H.push({p:pg,x:l/scale,y:curH-(t+h)/scale,w:w/scale,h:h/scale,c:color});persist();drawOv()}
+});
+
+/* சொல் தேடி ஹைலைட் */
+$('go').onclick=async()=>{
+ if(!doc){say('முதலில் PDF திறக்கவும்');return}
+ const term=$('q').value.trim().toLowerCase();if(!term){say('தேட வேண்டிய சொல்லை உள்ளிடவும்');return}
+ const from=$('allp').checked?1:pg,to=$('allp').checked?doc.numPages:pg;let n=0;say('தேடுகிறது...');
+ for(let p=from;p<=to;p++){
+  const tc=await(await doc.getPage(p)).getTextContent();
+  tc.items.forEach(it=>{
+   const s=it.str.toLowerCase();if(!s||!it.width)return;let i=s.indexOf(term);
+   while(i!==-1){const fs=Math.hypot(it.transform[2],it.transform[3])||it.height;
+    H.push({p,x:it.transform[4]+it.width*i/s.length,y:it.transform[5]-fs*.2,w:it.width*term.length/s.length,h:fs*1.15,c:color});
+    n++;i=s.indexOf(term,i+term.length)}
+  });
+ }
+ persist();drawOv();say(n?n+' இடங்கள் ஹைலைட் ஆனது':'எதுவும் கிடைக்கவில்லை (ஸ்கேன் PDF-ல் தேட முடியாது)');
+};
+
+/* PDF சேமி */
+$('save').onclick=async()=>{
+ if(!doc){say('முதலில் PDF திறக்கவும்');return}
+ if(!H.length){say('ஹைலைட் எதுவும் இல்லை');return}
+ say('சேமிக்கிறது...');
+ try{
+  const {PDFDocument,rgb,BlendMode}=PDFLib,pd=await PDFDocument.load(bytes,{ignoreEncryption:true}),pages=pd.getPages();
+  H.forEach(h=>{const pgx=pages[h.p-1];if(!pgx)return;
+   const c=parseInt(h.c.slice(1),16);
+   pgx.drawRectangle({x:h.x,y:h.y,width:h.w,height:h.h,color:rgb((c>>16&255)/255,(c>>8&255)/255,(c&255)/255),opacity:.55,blendMode:BlendMode.Multiply})});
+  dl(new Blob([await pd.save()],{type:'application/pdf'}),'highlighted_'+fname);say('PDF சேமிக்கப்பட்டது');
+ }catch(e){say('சேமிக்க முடியவில்லை')}
+};
+function dl(b,n){const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=n;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),2000)}
+
+/* JSON */
+$('exp').onclick=()=>{if(!doc){say('முதலில் PDF திறக்கவும்');return}dl(new Blob([JSON.stringify(H)],{type:'application/json'}),fname.replace(/\.pdf$/i,'')+'_highlights.json')};
+$('imp').onchange=async e=>{const f=e.target.files[0];if(!f||!doc){say('முதலில் PDF திறக்கவும்');return}
+ try{const a=JSON.parse(await f.text());if(Array.isArray(a)){H=a;persist();drawOv();say(a.length+' ஹைலைட் இறக்கப்பட்டது')}}catch(x){say('JSON சரியில்லை')}e.target.value=''};
+
+/* கட்டுப்பாடுகள் */
+$('f').onchange=e=>{const fl=e.target.files[0];e.target.value='';load(fl)};
+if(!window.pdfjsLib)say('PDF நூலகம் லோட் ஆகவில்லை - இன்டர்நெட் தேவை');
+$('prev').onclick=()=>{if(pg>1){pg--;render()}};
+$('next').onclick=()=>{if(doc&&pg<doc.numPages){pg++;render()}};
+$('zi').onclick=()=>{if(doc){scale=Math.min(4,scale+.2);render()}};
+$('zo').onclick=()=>{if(doc){scale=Math.max(.5,scale-.2);render()}};
+$('mDraw').onclick=()=>{mode='draw';$('mDraw').classList.add('on');$('mErase').classList.remove('on');$('ov').classList.remove('erase')};
+$('mErase').onclick=()=>{mode='erase';$('mErase').classList.add('on');$('mDraw').classList.remove('on');$('ov').classList.add('erase')};
+$('undo').onclick=()=>{if(H.length){H.pop();persist();drawOv()}};
+$('clrP').onclick=()=>{if(doc&&confirm('இந்தப் பக்க ஹைலைட்களை அழிக்கவா?')){H=H.filter(h=>h.p!==pg);persist();drawOv()}};
+$('clrA').onclick=()=>{if(doc&&confirm('எல்லா ஹைலைட்களையும் அழிக்கவா?')){H=[];persist();drawOv()}};
+document.addEventListener('keydown',e=>{if(e.target.tagName==='INPUT')return;if(e.key==='ArrowRight')$('next').click();if(e.key==='ArrowLeft')$('prev').click()});
+document.body.addEventListener('dragover',e=>e.preventDefault());
+document.body.addEventListener('drop',e=>{e.preventDefault();load(e.dataTransfer.files[0])});
+</script>
+</body>
+</html>
