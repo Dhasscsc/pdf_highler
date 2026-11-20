@@ -21,13 +21,13 @@ button.main{background:var(--ok);color:#fff}
 button.danger{background:var(--bad);color:#fff}
 button:disabled{opacity:.45;cursor:default}
 input[type=text],input[type=number]{font:inherit;font-size:13px;padding:7px 9px;border:0;border-radius:6px;width:150px}
-input[type=file]{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;pointer-events:none}
+input[type=file]{display:none}
 .sw{width:26px;height:26px;border-radius:50%;border:2px solid #fff;padding:0}
 .sw.sel{outline:3px solid var(--acc);outline-offset:1px}
 label{font-size:13px;display:flex;gap:4px;align-items:center}
 #msg{font-size:13px;color:#cfe3ff;margin-left:auto}
 main{padding:14px;overflow:auto;text-align:center}
-#drop{max-width:520px;margin:60px auto;padding:40px 20px;border:3px dashed #8a9bb5;border-radius:14px;color:#51607a;line-height:1.8}
+#drop{cursor:pointer;max-width:520px;margin:60px auto;padding:40px 20px;border:3px dashed #8a9bb5;border-radius:14px;color:#51607a;line-height:1.8}
 #wrap{display:none;position:relative;margin:0 auto;box-shadow:0 2px 14px rgba(0,0,0,.25);background:#fff;width:max-content}
 #ov{position:absolute;inset:0;cursor:crosshair;touch-action:none}
 #ov.erase{cursor:pointer;touch-action:auto}
@@ -40,7 +40,7 @@ main{padding:14px;overflow:auto;text-align:center}
 <header>
 <h1>PDF ஹைலைட் டூல்</h1>
 <div class="row">
-<label class="btn" for="f">PDF திற</label><input type="file" id="f" accept=".pdf,application/pdf">
+<button id="open">PDF திற</button><input type="file" id="f" accept=".pdf,application/pdf">
 <button id="prev" disabled>◀</button>
 <span id="pn" style="font-size:13px">0 / 0</span>
 <button id="next" disabled>▶</button>
@@ -59,8 +59,9 @@ main{padding:14px;overflow:auto;text-align:center}
 <button id="clrA" class="danger">எல்லாம் அழி</button>
 <button id="save" class="main">ஹைலைட் PDF சேமி</button>
 <button id="exp">JSON எடு</button>
-<label class="btn" for="imp">JSON இறக்கு</label><input type="file" id="imp" accept=".json">
+<button id="impb">JSON இறக்கு</button><input type="file" id="imp" accept=".json">
 </div>
+<div class="row" id="res"></div>
 </header>
 <main>
 <div id="drop">PDF கோப்பை இங்கே இழுத்து விடவும்<br>அல்லது மேலே "PDF திற" அழுத்தவும்<br>பக்கத்தின் மேல் மவுஸ் / விரலால் இழுத்தால் ஹைலைட் ஆகும்</div>
@@ -85,7 +86,7 @@ async function load(file){
  try{doc=await pdfjsLib.getDocument({data:bytes.slice()}).promise}catch(e){say('PDF திறக்க முடியவில்லை');return}
  key='hl:'+fname+':'+file.size;
  try{H=JSON.parse(localStorage.getItem(key)||'[]')}catch(e){H=[]}
- pg=1;$('drop').style.display='none';$('wrap').style.display='block';
+ pg=1;$('res').innerHTML='';$('drop').style.display='none';$('wrap').style.display='block';
  ['prev','next'].forEach(i=>$(i).disabled=false);
  await render();say(H.length?H.length+' ஹைலைட் மீட்கப்பட்டது':'தயார்');
 }
@@ -102,7 +103,7 @@ async function render(){
 
 function drawOv(){
  const ov=$('ov');ov.querySelectorAll('.hl').forEach(n=>n.remove());
- H.forEach((h,i)=>{if(h.p!==pg)return;const d=document.createElement('div');d.className='hl';
+ H.forEach((h,i)=>{if(h.p!==pg)return;const d=document.createElement('div');d.className='hl';if(h.s)d.dataset.s=1;
   d.style.cssText=`left:${h.x*scale}px;top:${(curH-h.y-h.h)*scale}px;width:${h.w*scale}px;height:${h.h*scale}px;background:${h.c}`;
   d.onclick=e=>{if(mode==='erase'){H.splice(H.indexOf(h),1);persist();drawOv();e.stopPropagation()}};ov.appendChild(d)});
 }
@@ -130,7 +131,7 @@ $('ov').addEventListener('pointerup',e=>{
 $('go').onclick=async()=>{
  if(!doc){say('முதலில் PDF திறக்கவும்');return}
  const term=$('q').value.trim().toLowerCase();if(!term){say('தேட வேண்டிய சொல்லை உள்ளிடவும்');return}
- const from=$('allp').checked?1:pg,to=$('allp').checked?doc.numPages:pg;let n=0;say('தேடுகிறது...');
+ const from=$('allp').checked?1:pg,to=$('allp').checked?doc.numPages:pg;let n=0;const cnt={};H=H.filter(h=>!h.s);say('தேடுகிறது...');
  const t2=term.replace(/\s+/g,'');let items=0;
  for(let p=from;p<=to;p++){
   const tc=await(await doc.getPage(p)).getTextContent();
@@ -145,13 +146,22 @@ $('go').onclick=async()=>{
    const seg=new Map();
    for(let j=i;j<i+t2.length;j++){const o=ch[j];if(!o.it)continue;const g=seg.get(o.it)||{a:o.k,b:o.k};g.b=o.k;seg.set(o.it,g)}
    seg.forEach((g,it)=>{const len=it.str.length||1,fs=Math.hypot(it.transform[2],it.transform[3])||it.height||10,wd=it.width||fs*.5*len;
-    H.push({p,x:it.transform[4]+wd*g.a/len,y:it.transform[5]-fs*.2,w:wd*(g.b-g.a+1)/len,h:fs*1.15,c:color})});
-   n++;i=s.indexOf(t2,i+t2.length);
+    H.push({p,x:it.transform[4]+wd*g.a/len,y:it.transform[5]-fs*.2,w:wd*(g.b-g.a+1)/len,h:fs*1.15,c:color,s:1})});
+   n++;cnt[p]=(cnt[p]||0)+1;i=s.indexOf(t2,i+t2.length);
   }
  }
- persist();drawOv();say(n?n+' இடங்கள் ஹைலைட் ஆனது':(items?'எதுவும் கிடைக்கவில்லை':'இந்த PDF-ல் டெக்ஸ்ட் இல்லை (ஸ்கேன் PDF)'));
+ persist();$('res').innerHTML='';
+ const pgs=Object.keys(cnt).map(Number);
+ if(!pgs.length){drawOv();say(items?'எதுவும் கிடைக்கவில்லை':'இந்த PDF-ல் டெக்ஸ்ட் இல்லை (ஸ்கேன் PDF)');return}
+ const lab=document.createElement('span');lab.style.cssText='font-size:13px;color:#fff';lab.textContent='கிடைத்த பக்கங்கள்:';$('res').appendChild(lab);
+ pgs.forEach(p=>{const b=document.createElement('button');b.textContent='பக்.'+p+(cnt[p]>1?' ('+cnt[p]+')':'');b.dataset.p=p;b.onclick=()=>goHit(p);$('res').appendChild(b)});
+ say(n+' இடங்கள் / '+pgs.length+' பக்கங்கள்');
+ goHit(pgs[0]);
 };
 
+async function goHit(p){pg=p;await render();
+ document.querySelectorAll('#res button').forEach(b=>b.classList.toggle('on',+b.dataset.p===p));
+ const el=$('ov').querySelector('.hl[data-s]');if(el)el.scrollIntoView({block:'center',behavior:'smooth'});}
 /* PDF சேமி */
 $('save').onclick=async()=>{
  if(!doc){say('முதலில் PDF திறக்கவும்');return}
@@ -173,6 +183,7 @@ $('imp').onchange=async e=>{const f=e.target.files[0];if(!f||!doc){say('மு�
  try{const a=JSON.parse(await f.text());if(Array.isArray(a)){H=a;persist();drawOv();say(a.length+' ஹைலைட் இறக்கப்பட்டது')}}catch(x){say('JSON சரியில்லை')}e.target.value=''};
 
 /* கட்டுப்பாடுகள் */
+$('open').onclick=()=>$('f').click();$('impb').onclick=()=>$('imp').click();$('drop').onclick=()=>$('f').click();
 $('f').onchange=e=>{const fl=e.target.files[0];e.target.value='';load(fl)};
 if(!window.pdfjsLib)say('PDF நூலகம் லோட் ஆகவில்லை - இன்டர்நெட் தேவை');
 $('prev').onclick=()=>{if(pg>1){pg--;render()}};
